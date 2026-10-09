@@ -44,6 +44,7 @@ jspm_packages/
 .agents
 .claude
 .cursor
+.devin
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -121,3 +122,5 @@ dist
 .pnp.*
 
 # End of https://mrkandreev.name/snippets/gitignore-generator/#Node
+# Prisma generated client (rebuild with: npx prisma generate)
+src/generated/
