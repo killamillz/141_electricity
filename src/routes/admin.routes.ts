@@ -1,0 +1,13 @@
+import { Router } from "express";
+import { authenticate } from "../middleware/auth.middleware.js";
+import { requireAdmin } from "../middleware/admin.middleware.js";
+import { updateMonthlyAmount, userBills } from "../controllers/admin.controller.js";
+
+const router = Router();
+
+router.use(authenticate, requireAdmin);
+
+router.patch("/users/:id/monthly-amount", updateMonthlyAmount);
+router.get("/users/:id/bills", userBills);
+
+export default router;

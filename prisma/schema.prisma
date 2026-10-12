@@ -12,10 +12,15 @@ enum UserRole {
   ADMIN
 }
 
-enum SubscriptionStatus {
+enum BillStatus {
   PAID
   PENDING
   LATE
+}
+
+enum PaymentSource {
+  RECEIPT // fields extracted from a scanned receipt, then confirmed by the user
+  MANUAL // typed in by the user
 }
 
 model User {
@@ -25,16 +30,40 @@ model User {
   firstName     String?
   lastName      String?
   role          UserRole       @default(USER)
+  monthlyAmount Decimal? // set by an admin; null = no monthly plan
+  bills         MonthlyBill[]
   subscriptions Subscription[] // one user → many subscriptions
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
 
 model Subscription {
-  id        String             @id @default(uuid())
-  status    SubscriptionStatus @default(PENDING)
-  amount    Decimal
-  user      User               @relation(fields: [userId], references: [id])
+  id            String        @id @default(uuid())
+  amount        Decimal // amount paid
+  billAmount    Decimal       @default(0) // portion of amount counted toward the bill; the rest is extra
+  token         String?       @unique // meter token code
+  kilowattHours Decimal // kWh bought
+  source        PaymentSource @default(MANUAL)
+  purchasedAt   DateTime      @default(now())
+  bill          MonthlyBill?  @relation(fields: [billId], references: [id])
+  billId        String? // set = (part of it) counted toward that month's bill; null = extra
+  user          User          @relation(fields: [userId], references: [id])
+  userId        String
+  createdAt     DateTime      @default(now())
+
+  @@index([userId, purchasedAt])
+}
+
+model MonthlyBill {
+  id        String         @id @default(uuid())
+  user      User           @relation(fields: [userId], references: [id])
   userId    String
-  createdAt DateTime           @default(now())
+  month     String // "2026-10", in Africa/Lagos time
+  amountDue Decimal // copied from user.monthlyAmount when the bill is created
+  status    BillStatus     @default(PENDING)
+  paidAt    DateTime?
+  payments  Subscription[]
+  createdAt DateTime       @default(now())
+
+  @@unique([userId, month]) // one bill per user per month
 }
