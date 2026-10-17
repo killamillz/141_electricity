@@ -51,6 +51,7 @@ export const openApiSpec = {
     { name: "Auth", description: "Register, log in and the current user" },
     { name: "Payments", description: "Record electricity purchases and scan receipts" },
     { name: "Bills", description: "Monthly bill status" },
+    { name: "Leaderboard", description: "Who paid what this month or year, including extra payments" },
     { name: "Admin", description: "Admin-only: monthly amounts and user bills" },
   ],
   security: [{ bearerAuth: [] }],
@@ -373,6 +374,71 @@ export const openApiSpec = {
         },
       },
     },
+    "/leaderboard/month": {
+      get: {
+        tags: ["Leaderboard"],
+        summary: "Monthly leaderboard",
+        description:
+          "Everyone who paid in the month (Africa/Lagos time), ranked by total paid, or by " +
+          "extra paid with `sortBy=extra`. Shows names and amounts only, never emails. " +
+          "Users with the same amount share a rank.",
+        parameters: [
+          {
+            name: "month",
+            in: "query",
+            description: "Defaults to the current month",
+            schema: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$", example: "2026-10" },
+          },
+          { $ref: "#/components/parameters/LeaderboardSort" },
+        ],
+        responses: {
+          200: {
+            description: "The leaderboard",
+            content: json({ $ref: "#/components/schemas/Leaderboard" }, {
+              period: {
+                type: "month",
+                key: "2026-10",
+                from: "2026-09-30T23:00:00.000Z",
+                to: "2026-10-31T23:00:00.000Z",
+              },
+              sortBy: "total",
+              totals: { totalPaid: 23000, billPaid: 20000, extraPaid: 3000, payers: 2 },
+              entries: [
+                { rank: 1, name: "Ada Obi", isMe: true, totalPaid: 13000, billPaid: 10000, extraPaid: 3000, payments: 2 },
+                { rank: 2, name: "Tunde Bello", isMe: false, totalPaid: 10000, billPaid: 10000, extraPaid: 0, payments: 1 },
+              ],
+              me: { rank: 1, name: "Ada Obi", isMe: true, totalPaid: 13000, billPaid: 10000, extraPaid: 3000, payments: 2 },
+            }),
+          },
+          400: validationError,
+          401: unauthorized,
+        },
+      },
+    },
+    "/leaderboard/year": {
+      get: {
+        tags: ["Leaderboard"],
+        summary: "Yearly leaderboard",
+        description: "Same as the monthly leaderboard, for a whole calendar year.",
+        parameters: [
+          {
+            name: "year",
+            in: "query",
+            description: "Defaults to the current year",
+            schema: { type: "string", pattern: "^\\d{4}$", example: "2026" },
+          },
+          { $ref: "#/components/parameters/LeaderboardSort" },
+        ],
+        responses: {
+          200: {
+            description: "The leaderboard",
+            content: json({ $ref: "#/components/schemas/Leaderboard" }),
+          },
+          400: validationError,
+          401: unauthorized,
+        },
+      },
+    },
     "/admin/users/{id}/monthly-amount": {
       patch: {
         tags: ["Admin"],
@@ -487,6 +553,12 @@ export const openApiSpec = {
         required: true,
         description: "The payment's id",
         schema: { type: "string", format: "uuid" },
+      },
+      LeaderboardSort: {
+        name: "sortBy",
+        in: "query",
+        description: "Rank by total paid, or by extra paid beyond the monthly bills",
+        schema: { type: "string", enum: ["total", "extra"], default: "total" },
       },
     },
     schemas: {
@@ -619,6 +691,51 @@ export const openApiSpec = {
           remaining: { type: "number", description: "Still owed; 0 when paid" },
           status: { $ref: "#/components/schemas/BillStatus" },
           paidAt: { type: ["string", "null"], format: "date-time" },
+        },
+      },
+      LeaderboardEntry: {
+        type: "object",
+        required: ["rank", "name", "isMe", "totalPaid", "billPaid", "extraPaid", "payments"],
+        properties: {
+          rank: { type: "integer", minimum: 1, description: "Equal amounts share a rank" },
+          name: { type: "string", description: "First and last name, or \"Anonymous\" if not set" },
+          isMe: { type: "boolean", description: "true for the logged-in user's row" },
+          totalPaid: { type: "number" },
+          billPaid: { type: "number", description: "Counted toward monthly bills" },
+          extraPaid: { type: "number", description: "Paid beyond the monthly bills" },
+          payments: { type: "integer", description: "Number of payments in the period" },
+        },
+      },
+      Leaderboard: {
+        type: "object",
+        required: ["period", "sortBy", "totals", "entries", "me"],
+        properties: {
+          period: {
+            type: "object",
+            required: ["type", "key", "from", "to"],
+            properties: {
+              type: { type: "string", enum: ["month", "year"] },
+              key: { type: "string", examples: ["2026-10", "2026"] },
+              from: { type: "string", format: "date-time", description: "Start, inclusive" },
+              to: { type: "string", format: "date-time", description: "End, exclusive" },
+            },
+          },
+          sortBy: { type: "string", enum: ["total", "extra"] },
+          totals: {
+            type: "object",
+            required: ["totalPaid", "billPaid", "extraPaid", "payers"],
+            properties: {
+              totalPaid: { type: "number" },
+              billPaid: { type: "number" },
+              extraPaid: { type: "number" },
+              payers: { type: "integer", description: "Number of people who paid" },
+            },
+          },
+          entries: { type: "array", items: { $ref: "#/components/schemas/LeaderboardEntry" } },
+          me: {
+            oneOf: [{ $ref: "#/components/schemas/LeaderboardEntry" }, { type: "null" }],
+            description: "The logged-in user's row, or null if they paid nothing in the period",
+          },
         },
       },
       ReceiptImageLink: {
