@@ -3,6 +3,16 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../config/database.js";
 import { generateToken } from "../utils/jwt.js";
 import { AppError } from "../utils/AppError.js";
+import type { User } from "../generated/prisma/client.js";
+
+// What the client sees about a user; never the password hash
+const publicUser = (user: User) => ({
+  id: user.id,
+  email: user.email,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  role: user.role, // "ADMIN" users can open the admin pages
+});
 
 // No try/catch needed: Express 5 forwards errors thrown in async handlers
 // to the error middleware (src/middleware/error.middleware.ts).
@@ -38,12 +48,7 @@ export const register = async (req: Request, res: Response) => {
   return res.status(201).json({
     message: "Registration successful",
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    },
+    user: publicUser(user),
   });
 };
 
@@ -75,12 +80,7 @@ export const login = async (req: Request, res: Response) => {
   return res.json({
     message: "Login successful",
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    },
+    user: publicUser(user),
   });
 };
 
@@ -102,12 +102,7 @@ export const me = async (req: Request, res: Response) => {
   }
 
   return res.json({
-    user: {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    },
+    user: publicUser(user),
   });
 };
 

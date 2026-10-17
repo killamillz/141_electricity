@@ -79,11 +79,15 @@ export const openApiSpec = {
         },
         responses: {
           201: {
-            description: "Account created; returns a token valid for 1 hour",
+            description: "Account created; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           409: errorResponse("Email already registered", "User already exists"),
+          429: errorResponse(
+            "More than 5 accounts created from this address in an hour",
+            "Too many accounts created, please try again later",
+          ),
         },
       },
     },
@@ -108,11 +112,15 @@ export const openApiSpec = {
         },
         responses: {
           200: {
-            description: "Logged in; returns a token valid for 1 hour",
+            description: "Logged in; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           401: errorResponse("Wrong email or password", "Invalid credentials"),
+          429: errorResponse(
+            "10 failed logins from this address in 15 minutes",
+            "Too many failed login attempts, please try again in 15 minutes",
+          ),
         },
       },
     },
@@ -122,7 +130,7 @@ export const openApiSpec = {
         summary: "Log out",
         description:
           "Tokens are stateless JWTs, so the client must delete its token. " +
-          "The token itself stays valid until it expires (1 hour).",
+          "The token itself stays valid until it expires (7 days).",
         responses: {
           200: {
             description: "Logged out",
@@ -209,6 +217,10 @@ export const openApiSpec = {
           422: errorResponse(
             "Image is not a receipt or could not be read",
             "This image doesn't look like an electricity receipt",
+          ),
+          429: errorResponse(
+            "More than 20 scans by this user in an hour; enter details manually",
+            "You've scanned a lot of receipts this hour, please enter the details manually or try again later",
           ),
           503: errorResponse(
             "Scanning is unavailable (no API key, outage or rate limit); enter details manually",
@@ -439,6 +451,27 @@ export const openApiSpec = {
         },
       },
     },
+    "/admin/users": {
+      get: {
+        tags: ["Admin"],
+        summary: "List all users",
+        description: "Sorted by name. Use a user's `id` with the other admin endpoints.",
+        responses: {
+          200: {
+            description: "All users",
+            content: json({
+              type: "object",
+              required: ["users"],
+              properties: {
+                users: { type: "array", items: { $ref: "#/components/schemas/AdminUser" } },
+              },
+            }),
+          },
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
     "/admin/users/{id}/monthly-amount": {
       patch: {
         tags: ["Admin"],
@@ -536,7 +569,7 @@ export const openApiSpec = {
         type: "http",
         scheme: "bearer",
         bearerFormat: "JWT",
-        description: "The `token` from register or login. Expires after 1 hour.",
+        description: "The `token` from register or login. Expires after 7 days.",
       },
     },
     parameters: {
@@ -592,20 +625,41 @@ export const openApiSpec = {
       },
       User: {
         type: "object",
-        required: ["id", "email", "firstName", "lastName"],
+        required: ["id", "email", "firstName", "lastName", "role"],
         properties: {
           id: { type: "string", format: "uuid" },
           email: { type: "string", format: "email" },
           firstName: { type: ["string", "null"] },
           lastName: { type: ["string", "null"] },
+          role: {
+            type: "string",
+            enum: ["USER", "ADMIN"],
+            description: "ADMIN users can use the /admin endpoints",
+          },
         },
+      },
+      AdminUser: {
+        allOf: [
+          { $ref: "#/components/schemas/User" },
+          {
+            type: "object",
+            required: ["monthlyAmount", "createdAt"],
+            properties: {
+              monthlyAmount: {
+                type: ["number", "null"],
+                description: "Amount due each month, or null if the user has no plan",
+              },
+              createdAt: { type: "string", format: "date-time" },
+            },
+          },
+        ],
       },
       AuthResponse: {
         type: "object",
         required: ["message", "token", "user"],
         properties: {
           message: { type: "string" },
-          token: { type: "string", description: "JWT, valid for 1 hour" },
+          token: { type: "string", description: "JWT, valid for 7 days" },
           user: { $ref: "#/components/schemas/User" },
         },
       },
