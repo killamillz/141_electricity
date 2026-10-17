@@ -1,8 +1,17 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { AppError } from "../utils/AppError.js";
-import { listPayments, recordPayment } from "../services/billing.service.js";
+import {
+  findReceiptImageId,
+  listPayments,
+  recordPayment,
+} from "../services/billing.service.js";
 import { scanReceipt, RECEIPT_MIME_TYPES } from "../services/receipt.service.js";
+import {
+  deleteReceiptImage,
+  receiptImageUrl,
+  uploadReceiptImage,
+} from "../services/image.service.js";
 
 const requireUserId = (req: Request) => {
   const userId = req.user?.id;
@@ -45,18 +54,45 @@ export const scan = async (req: Request, res: Response) => {
   });
 };
 
-/** Save a payment, whether typed in or confirmed from a scan */
+/** Save a payment, whether typed in or confirmed from a scan, optionally with the receipt image */
 
 export const create = async (req: Request, res: Response) => {
   const userId = requireUserId(req);
   const body = PaymentBody.parse(req.body ?? {});
 
-  const result = await recordPayment(userId, body);
+  // Upload only after the body is valid, so bad requests don't leave images behind
+  const receiptImageId = req.file
+    ? await uploadReceiptImage(req.file.buffer)
+    : undefined;
 
-  return res.status(201).json({
-    message: "Payment recorded",
-    ...result,
-  });
+  try {
+    const result = await recordPayment(userId, { ...body, receiptImageId });
+
+    return res.status(201).json({
+      message: "Payment recorded",
+      ...result,
+    });
+  } catch (error) {
+    if (receiptImageId) {
+      await deleteReceiptImage(receiptImageId);
+    }
+    throw error;
+  }
+};
+
+/** A short-lived link to the receipt image of one of the user's payments */
+
+export const receiptImage = async (req: Request, res: Response) => {
+  const userId = requireUserId(req);
+  const paymentId = req.params.id;
+
+  if (typeof paymentId !== "string" || !paymentId) {
+    throw new AppError(400, "Payment id is required");
+  }
+
+  const publicId = await findReceiptImageId(paymentId, userId);
+
+  return res.json(receiptImageUrl(publicId));
 };
 
 /** The logged-in user's payments */

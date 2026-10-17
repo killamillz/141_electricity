@@ -1,7 +1,12 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { AppError } from "../utils/AppError.js";
-import { listBills, setMonthlyAmount } from "../services/billing.service.js";
+import {
+  findReceiptImageId,
+  listBills,
+  setMonthlyAmount,
+} from "../services/billing.service.js";
+import { receiptImageUrl } from "../services/image.service.js";
 
 const MonthlyAmountBody = z.object({
   // null removes the user's monthly plan
@@ -36,4 +41,17 @@ export const userBills = async (req: Request, res: Response) => {
   const bills = await listBills(userIdParam(req));
 
   return res.json({ bills });
+};
+
+/** A short-lived link to any payment's receipt image */
+
+export const paymentReceiptImage = async (req: Request, res: Response) => {
+  const paymentId = req.params.id;
+  if (typeof paymentId !== "string" || !paymentId) {
+    throw new AppError(400, "Payment id is required");
+  }
+
+  const publicId = await findReceiptImageId(paymentId);
+
+  return res.json(receiptImageUrl(publicId));
 };

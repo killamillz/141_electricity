@@ -44,6 +44,7 @@ model Subscription {
   token         String?       @unique // meter token code
   kilowattHours Decimal // kWh bought
   source        PaymentSource @default(MANUAL)
+  receiptImageId String? // Cloudinary public_id of the receipt photo, if one was uploaded
   purchasedAt   DateTime      @default(now())
   bill          MonthlyBill?  @relation(fields: [billId], references: [id])
   billId        String? // set = (part of it) counted toward that month's bill; null = extra

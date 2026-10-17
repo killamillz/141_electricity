@@ -224,19 +224,42 @@ export const openApiSpec = {
           "Saves an electricity purchase for the logged-in user and applies it to the " +
           "bill for the month it was bought in (Africa/Lagos time). Up to the amount still " +
           "owed counts toward the bill; the rest is recorded as extra. A payment in a month " +
-          "with no bill (no plan, or before the plan started) is entirely extra.",
+          "with no bill (no plan, or before the plan started) is entirely extra.\n\n" +
+          "To keep the receipt photo with the payment, send `multipart/form-data` with the " +
+          "same fields plus a `receipt` image. It is stored privately on Cloudinary; view it " +
+          "with `GET /subscriptions/{id}/receipt`.",
         requestBody: {
           required: true,
-          content: json(
-            { $ref: "#/components/schemas/PaymentInput" },
-            {
-              amount: 8000,
-              kilowattHours: 100,
-              token: "1234-5678-9012-3456-7890",
-              purchasedAt: "2026-10-09T14:30:00+01:00",
-              source: "RECEIPT",
+          content: {
+            ...json(
+              { $ref: "#/components/schemas/PaymentInput" },
+              {
+                amount: 8000,
+                kilowattHours: 100,
+                token: "1234-5678-9012-3456-7890",
+                purchasedAt: "2026-10-09T14:30:00+01:00",
+                source: "RECEIPT",
+              },
+            ),
+            "multipart/form-data": {
+              schema: {
+                allOf: [
+                  { $ref: "#/components/schemas/PaymentInput" },
+                  {
+                    type: "object",
+                    properties: {
+                      receipt: {
+                        type: "string",
+                        format: "binary",
+                        description: "Optional receipt photo: JPEG, PNG, WebP or GIF, up to 5 MB",
+                      },
+                    },
+                  },
+                ],
+              },
+              encoding: { receipt: { contentType: "image/jpeg, image/png, image/webp, image/gif" } },
             },
-          ),
+          },
         },
         responses: {
           201: {
@@ -265,6 +288,7 @@ export const openApiSpec = {
                   token: "12345678901234567890",
                   kilowattHours: 100,
                   source: "RECEIPT",
+                  hasReceiptImage: true,
                   month: "2026-10",
                   purchasedAt: "2026-10-09T13:30:00.000Z",
                 },
@@ -281,6 +305,31 @@ export const openApiSpec = {
           400: validationError,
           401: unauthorized,
           409: errorResponse("Token already recorded", "This token has already been recorded"),
+          503: errorResponse(
+            "The receipt image couldn't be uploaded; nothing was saved",
+            "Couldn't save the receipt image, please try again",
+          ),
+        },
+      },
+    },
+    "/subscriptions/{id}/receipt": {
+      get: {
+        tags: ["Payments"],
+        summary: "Get a link to my payment's receipt image",
+        description:
+          "Returns a signed Cloudinary link to the receipt image. The link expires after " +
+          "5 minutes, so request a new one each time the image is shown.",
+        parameters: [{ $ref: "#/components/parameters/PaymentId" }],
+        responses: {
+          200: {
+            description: "Signed link to the image",
+            content: json({ $ref: "#/components/schemas/ReceiptImageLink" }),
+          },
+          401: unauthorized,
+          404: errorResponse(
+            "No payment with that id for this user, or it has no image",
+            "This payment has no receipt image",
+          ),
         },
       },
     },
@@ -394,6 +443,26 @@ export const openApiSpec = {
         },
       },
     },
+    "/admin/payments/{id}/receipt": {
+      get: {
+        tags: ["Admin"],
+        summary: "Get a link to any payment's receipt image",
+        description: "Same as `GET /subscriptions/{id}/receipt`, for any user's payment.",
+        parameters: [{ $ref: "#/components/parameters/PaymentId" }],
+        responses: {
+          200: {
+            description: "Signed link to the image",
+            content: json({ $ref: "#/components/schemas/ReceiptImageLink" }),
+          },
+          401: unauthorized,
+          403: forbidden,
+          404: errorResponse(
+            "No payment with that id, or it has no image",
+            "This payment has no receipt image",
+          ),
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -410,6 +479,13 @@ export const openApiSpec = {
         in: "path",
         required: true,
         description: "The user's id",
+        schema: { type: "string", format: "uuid" },
+      },
+      PaymentId: {
+        name: "id",
+        in: "path",
+        required: true,
+        description: "The payment's id",
         schema: { type: "string", format: "uuid" },
       },
     },
@@ -491,7 +567,7 @@ export const openApiSpec = {
         type: "object",
         required: [
           "id", "amount", "billAmount", "extraAmount", "type",
-          "token", "kilowattHours", "source", "month", "purchasedAt",
+          "token", "kilowattHours", "source", "hasReceiptImage", "month", "purchasedAt",
         ],
         properties: {
           id: { type: "string", format: "uuid" },
@@ -507,6 +583,10 @@ export const openApiSpec = {
           token: { type: ["string", "null"] },
           kilowattHours: { type: "number" },
           source: { type: "string", enum: ["RECEIPT", "MANUAL"] },
+          hasReceiptImage: {
+            type: "boolean",
+            description: "true if a receipt photo was saved; fetch it from GET /subscriptions/{id}/receipt",
+          },
           month: { type: "string", pattern: "^\\d{4}-\\d{2}$", example: "2026-10" },
           purchasedAt: { type: "string", format: "date-time" },
         },
@@ -539,6 +619,14 @@ export const openApiSpec = {
           remaining: { type: "number", description: "Still owed; 0 when paid" },
           status: { $ref: "#/components/schemas/BillStatus" },
           paidAt: { type: ["string", "null"], format: "date-time" },
+        },
+      },
+      ReceiptImageLink: {
+        type: "object",
+        required: ["url", "expiresAt"],
+        properties: {
+          url: { type: "string", format: "uri", description: "Signed Cloudinary link to the JPEG" },
+          expiresAt: { type: "string", format: "date-time", description: "When the link stops working" },
         },
       },
       ScannedReceipt: {
