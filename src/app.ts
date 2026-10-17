@@ -7,6 +7,7 @@ import authRoutes from "./routes/auth.routes.js";
 import subscriptionRoutes from "./routes/subscription.routes.js";
 import billRoutes from "./routes/bill.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
+import leaderboardRoutes from "./routes/leaderboard.routes.js";
 import { notFound, errorHandler } from "./middleware/error.middleware.js";
 
 const app = express();
@@ -32,6 +33,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
 app.use("/api/bills", billRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/leaderboard", leaderboardRoutes);
 
 // Must come after all routes
 app.use(notFound);
