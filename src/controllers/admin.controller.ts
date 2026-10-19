@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { AppError } from "../utils/AppError.js";
+import { prisma } from "../config/database.js";
 import {
   findReceiptImageId,
   listBills,
@@ -19,6 +20,30 @@ const userIdParam = (req: Request) => {
     throw new AppError(400, "User id is required");
   }
   return id;
+};
+
+/** All users, so the admin can pick whose plan or bills to manage */
+
+export const listUsers = async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({
+    orderBy: [{ firstName: "asc" }, { lastName: "asc" }, { email: "asc" }],
+    select: {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      role: true,
+      monthlyAmount: true,
+      createdAt: true,
+    },
+  });
+
+  return res.json({
+    users: users.map((u) => ({
+      ...u,
+      monthlyAmount: u.monthlyAmount?.toNumber() ?? null,
+    })),
+  });
 };
 
 /** Set a user's monthly amount */

@@ -79,11 +79,15 @@ export const openApiSpec = {
         },
         responses: {
           201: {
-            description: "Account created; returns a token valid for 1 hour",
+            description: "Account created; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           409: errorResponse("Email already registered", "User already exists"),
+          429: errorResponse(
+            "More than 5 accounts created from this address in an hour",
+            "Too many accounts created, please try again later",
+          ),
         },
       },
     },
@@ -108,11 +112,15 @@ export const openApiSpec = {
         },
         responses: {
           200: {
-            description: "Logged in; returns a token valid for 1 hour",
+            description: "Logged in; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           401: errorResponse("Wrong email or password", "Invalid credentials"),
+          429: errorResponse(
+            "10 failed logins from this address in 15 minutes",
+            "Too many failed login attempts, please try again in 15 minutes",
+          ),
         },
       },
     },
@@ -122,13 +130,95 @@ export const openApiSpec = {
         summary: "Log out",
         description:
           "Tokens are stateless JWTs, so the client must delete its token. " +
-          "The token itself stays valid until it expires (1 hour).",
+          "The token itself stays valid until it expires (7 days).",
         responses: {
           200: {
             description: "Logged out",
             content: json({ $ref: "#/components/schemas/Message" }, { message: "Logout successful" }),
           },
           401: unauthorized,
+        },
+      },
+    },
+    "/auth/forgot-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Request a password reset email",
+        description:
+          "If an account exists for the email, sends a link to " +
+          "`{FRONTEND_URL}/reset-password?token=...` that works once, for 30 minutes. " +
+          "Always returns the same message, so it can't be used to check who has an account. " +
+          "Requesting again cancels earlier links.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["email"],
+              properties: { email: { type: "string", format: "email" } },
+            },
+            { email: "ada@example.com" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Request accepted",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "If an account exists for that email, we've sent a link to reset the password." },
+            ),
+          },
+          400: validationError,
+          429: errorResponse(
+            "More than 5 requests from this address in an hour",
+            "Too many reset requests, please try again later",
+          ),
+        },
+      },
+    },
+    "/auth/reset-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Set a new password with the emailed token",
+        description:
+          "The frontend's /reset-password page reads `token` from its URL and sends it here " +
+          "with the new password. The user gets a \"password changed\" email afterwards. " +
+          "Note: tokens already issued to other devices stay valid until they expire.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["token", "password"],
+              properties: {
+                token: { type: "string", description: "From the reset link" },
+                password: { type: "string", format: "password", minLength: 8, maxLength: 72 },
+              },
+            },
+            { token: "q3Jx...from-the-link", password: "new-s3cret-pass" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Password changed",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "Password updated. You can now log in with your new password." },
+            ),
+          },
+          400: {
+            description: "Password too short or long, or the link is invalid, used or expired",
+            content: json(
+              { oneOf: [{ $ref: "#/components/schemas/ValidationError" }, { $ref: "#/components/schemas/Error" }] },
+              { message: "This reset link is invalid or has expired. Please request a new one." },
+            ),
+          },
+          429: errorResponse(
+            "More than 10 attempts from this address in 15 minutes",
+            "Too many attempts, please try again in 15 minutes",
+          ),
         },
       },
     },
@@ -209,6 +299,10 @@ export const openApiSpec = {
           422: errorResponse(
             "Image is not a receipt or could not be read",
             "This image doesn't look like an electricity receipt",
+          ),
+          429: errorResponse(
+            "More than 20 scans by this user in an hour; enter details manually",
+            "You've scanned a lot of receipts this hour, please enter the details manually or try again later",
           ),
           503: errorResponse(
             "Scanning is unavailable (no API key, outage or rate limit); enter details manually",
@@ -439,6 +533,27 @@ export const openApiSpec = {
         },
       },
     },
+    "/admin/users": {
+      get: {
+        tags: ["Admin"],
+        summary: "List all users",
+        description: "Sorted by name. Use a user's `id` with the other admin endpoints.",
+        responses: {
+          200: {
+            description: "All users",
+            content: json({
+              type: "object",
+              required: ["users"],
+              properties: {
+                users: { type: "array", items: { $ref: "#/components/schemas/AdminUser" } },
+              },
+            }),
+          },
+          401: unauthorized,
+          403: forbidden,
+        },
+      },
+    },
     "/admin/users/{id}/monthly-amount": {
       patch: {
         tags: ["Admin"],
@@ -536,7 +651,7 @@ export const openApiSpec = {
         type: "http",
         scheme: "bearer",
         bearerFormat: "JWT",
-        description: "The `token` from register or login. Expires after 1 hour.",
+        description: "The `token` from register or login. Expires after 7 days.",
       },
     },
     parameters: {
@@ -592,20 +707,41 @@ export const openApiSpec = {
       },
       User: {
         type: "object",
-        required: ["id", "email", "firstName", "lastName"],
+        required: ["id", "email", "firstName", "lastName", "role"],
         properties: {
           id: { type: "string", format: "uuid" },
           email: { type: "string", format: "email" },
           firstName: { type: ["string", "null"] },
           lastName: { type: ["string", "null"] },
+          role: {
+            type: "string",
+            enum: ["USER", "ADMIN"],
+            description: "ADMIN users can use the /admin endpoints",
+          },
         },
+      },
+      AdminUser: {
+        allOf: [
+          { $ref: "#/components/schemas/User" },
+          {
+            type: "object",
+            required: ["monthlyAmount", "createdAt"],
+            properties: {
+              monthlyAmount: {
+                type: ["number", "null"],
+                description: "Amount due each month, or null if the user has no plan",
+              },
+              createdAt: { type: "string", format: "date-time" },
+            },
+          },
+        ],
       },
       AuthResponse: {
         type: "object",
         required: ["message", "token", "user"],
         properties: {
           message: { type: "string" },
-          token: { type: "string", description: "JWT, valid for 1 hour" },
+          token: { type: "string", description: "JWT, valid for 7 days" },
           user: { $ref: "#/components/schemas/User" },
         },
       },
