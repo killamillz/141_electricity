@@ -4,6 +4,24 @@ import { prisma } from "../config/database.js";
 import { generateToken } from "../utils/jwt.js";
 import { AppError } from "../utils/AppError.js";
 import type { User } from "../generated/prisma/client.js";
+import { z } from "zod";
+import {
+  requestPasswordReset,
+  resetPassword as applyPasswordReset,
+} from "../services/passwordReset.service.js";
+
+const ForgotPasswordBody = z.object({
+  email: z.string().trim().email("Enter a valid email address"),
+});
+
+const ResetPasswordBody = z.object({
+  token: z.string().min(1, "Reset token is required"),
+  // bcrypt only uses the first 72 bytes of a password
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(72, "Password must be at most 72 characters"),
+});
 
 // What the client sees about a user; never the password hash
 const publicUser = (user: User) => ({
@@ -113,5 +131,30 @@ export const logout = async (_req: Request, res: Response) => {
   // The token itself remains valid until it expires.
   return res.json({
     message: "Logout successful",
+  });
+};
+
+/** Forgot password: emails a reset link if the account exists */
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  const { email } = ForgotPasswordBody.parse(req.body ?? {});
+
+  await requestPasswordReset(email);
+
+  // Same answer whether or not the account exists
+  return res.json({
+    message: "If an account exists for that email, we've sent a link to reset the password.",
+  });
+};
+
+/** Reset password using the token from the email link */
+
+export const resetPassword = async (req: Request, res: Response) => {
+  const { token, password } = ResetPasswordBody.parse(req.body ?? {});
+
+  await applyPasswordReset(token, password);
+
+  return res.json({
+    message: "Password updated. You can now log in with your new password.",
   });
 };

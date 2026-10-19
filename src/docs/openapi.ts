@@ -140,6 +140,88 @@ export const openApiSpec = {
         },
       },
     },
+    "/auth/forgot-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Request a password reset email",
+        description:
+          "If an account exists for the email, sends a link to " +
+          "`{FRONTEND_URL}/reset-password?token=...` that works once, for 30 minutes. " +
+          "Always returns the same message, so it can't be used to check who has an account. " +
+          "Requesting again cancels earlier links.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["email"],
+              properties: { email: { type: "string", format: "email" } },
+            },
+            { email: "ada@example.com" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Request accepted",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "If an account exists for that email, we've sent a link to reset the password." },
+            ),
+          },
+          400: validationError,
+          429: errorResponse(
+            "More than 5 requests from this address in an hour",
+            "Too many reset requests, please try again later",
+          ),
+        },
+      },
+    },
+    "/auth/reset-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Set a new password with the emailed token",
+        description:
+          "The frontend's /reset-password page reads `token` from its URL and sends it here " +
+          "with the new password. The user gets a \"password changed\" email afterwards. " +
+          "Note: tokens already issued to other devices stay valid until they expire.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["token", "password"],
+              properties: {
+                token: { type: "string", description: "From the reset link" },
+                password: { type: "string", format: "password", minLength: 8, maxLength: 72 },
+              },
+            },
+            { token: "q3Jx...from-the-link", password: "new-s3cret-pass" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Password changed",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "Password updated. You can now log in with your new password." },
+            ),
+          },
+          400: {
+            description: "Password too short or long, or the link is invalid, used or expired",
+            content: json(
+              { oneOf: [{ $ref: "#/components/schemas/ValidationError" }, { $ref: "#/components/schemas/Error" }] },
+              { message: "This reset link is invalid or has expired. Please request a new one." },
+            ),
+          },
+          429: errorResponse(
+            "More than 10 attempts from this address in 15 minutes",
+            "Too many attempts, please try again in 15 minutes",
+          ),
+        },
+      },
+    },
     "/auth/me": {
       get: {
         tags: ["Auth"],

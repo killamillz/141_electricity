@@ -21,4 +21,15 @@ if (IS_PRODUCTION && CORS_ORIGINS.length === 0) {
   );
 }
 
-export { JWT_SECRET, IS_PRODUCTION, CORS_ORIGINS };
+// Where the frontend lives; links in emails (e.g. password reset) point here
+const FRONTEND_URL = (
+  process.env.FRONTEND_URL ?? (IS_PRODUCTION ? "" : "http://localhost:5173")
+).replace(/\/$/, "");
+
+if (!FRONTEND_URL) {
+  throw new Error(
+    "FRONTEND_URL must be set in production (e.g. https://app.example.com)",
+  );
+}
+
+export { JWT_SECRET, IS_PRODUCTION, CORS_ORIGINS, FRONTEND_URL };

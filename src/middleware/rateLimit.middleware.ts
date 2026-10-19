@@ -26,6 +26,21 @@ export const registerLimiter = rateLimit({
   message: limitResponse("Too many accounts created, please try again later"),
 });
 
+// Stops one address from flooding people's inboxes with reset emails
+export const forgotPasswordLimiter = rateLimit({
+  ...common,
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  message: limitResponse("Too many reset requests, please try again later"),
+});
+
+export const resetPasswordLimiter = rateLimit({
+  ...common,
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: limitResponse("Too many attempts, please try again in 15 minutes"),
+});
+
 // Every scan is a paid Claude API call, so cap it per user.
 // Must run after `authenticate`.
 export const scanLimiter = rateLimit({
