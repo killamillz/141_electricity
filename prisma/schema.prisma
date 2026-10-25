@@ -24,32 +24,34 @@ enum PaymentSource {
 }
 
 model User {
-  id            String         @id @default(uuid())
-  email         String         @unique
-  password      String
-  firstName     String?
-  lastName      String?
-  role          UserRole       @default(USER)
-  monthlyAmount Decimal? // set by an admin; null = no monthly plan
-  bills         MonthlyBill[]
-  subscriptions Subscription[] // one user → many subscriptions
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  id             String               @id @default(uuid())
+  email          String               @unique
+  password       String
+  firstName      String?
+  lastName       String?
+  role           UserRole             @default(USER)
+  monthlyAmount  Decimal? // set by an admin; null = no monthly plan
+  bills          MonthlyBill[]
+  subscriptions  Subscription[] // one user → many subscriptions
+  passwordResets PasswordResetToken[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 }
 
 model Subscription {
-  id            String        @id @default(uuid())
-  amount        Decimal // amount paid
-  billAmount    Decimal       @default(0) // portion of amount counted toward the bill; the rest is extra
-  token         String?       @unique // meter token code
-  kilowattHours Decimal // kWh bought
-  source        PaymentSource @default(MANUAL)
-  purchasedAt   DateTime      @default(now())
-  bill          MonthlyBill?  @relation(fields: [billId], references: [id])
-  billId        String? // set = (part of it) counted toward that month's bill; null = extra
-  user          User          @relation(fields: [userId], references: [id])
-  userId        String
-  createdAt     DateTime      @default(now())
+  id             String        @id @default(uuid())
+  amount         Decimal // amount paid
+  billAmount     Decimal       @default(0) // portion of amount counted toward the bill; the rest is extra
+  token          String?       @unique // meter token code
+  kilowattHours  Decimal // kWh bought
+  source         PaymentSource @default(MANUAL)
+  receiptImageId String? // Cloudinary public_id of the receipt photo, if one was uploaded
+  purchasedAt    DateTime      @default(now())
+  bill           MonthlyBill?  @relation(fields: [billId], references: [id])
+  billId         String? // set = (part of it) counted toward that month's bill; null = extra
+  user           User          @relation(fields: [userId], references: [id])
+  userId         String
+  createdAt      DateTime      @default(now())
 
   @@index([userId, purchasedAt])
 }
@@ -66,4 +68,18 @@ model MonthlyBill {
   createdAt DateTime       @default(now())
 
   @@unique([userId, month]) // one bill per user per month
+}
+
+// One-time links for "forgot password". Only a hash of the token is stored,
+// so a leaked database can't be used to reset anyone's password.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique // sha256 of the token sent in the email
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }

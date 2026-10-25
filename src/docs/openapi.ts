@@ -51,6 +51,7 @@ export const openApiSpec = {
     { name: "Auth", description: "Register, log in and the current user" },
     { name: "Payments", description: "Record electricity purchases and scan receipts" },
     { name: "Bills", description: "Monthly bill status" },
+    { name: "Leaderboard", description: "Who paid what this month or year, including extra payments" },
     { name: "Admin", description: "Admin-only: monthly amounts and user bills" },
   ],
   security: [{ bearerAuth: [] }],
@@ -78,11 +79,15 @@ export const openApiSpec = {
         },
         responses: {
           201: {
-            description: "Account created; returns a token valid for 1 hour",
+            description: "Account created; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           409: errorResponse("Email already registered", "User already exists"),
+          429: errorResponse(
+            "More than 5 accounts created from this address in an hour",
+            "Too many accounts created, please try again later",
+          ),
         },
       },
     },
@@ -107,11 +112,15 @@ export const openApiSpec = {
         },
         responses: {
           200: {
-            description: "Logged in; returns a token valid for 1 hour",
+            description: "Logged in; returns a token valid for 7 days",
             content: json({ $ref: "#/components/schemas/AuthResponse" }),
           },
           400: errorResponse("Email or password missing", "Email and password are required"),
           401: errorResponse("Wrong email or password", "Invalid credentials"),
+          429: errorResponse(
+            "10 failed logins from this address in 15 minutes",
+            "Too many failed login attempts, please try again in 15 minutes",
+          ),
         },
       },
     },
@@ -121,13 +130,95 @@ export const openApiSpec = {
         summary: "Log out",
         description:
           "Tokens are stateless JWTs, so the client must delete its token. " +
-          "The token itself stays valid until it expires (1 hour).",
+          "The token itself stays valid until it expires (7 days).",
         responses: {
           200: {
             description: "Logged out",
             content: json({ $ref: "#/components/schemas/Message" }, { message: "Logout successful" }),
           },
           401: unauthorized,
+        },
+      },
+    },
+    "/auth/forgot-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Request a password reset email",
+        description:
+          "If an account exists for the email, sends a link to " +
+          "`{FRONTEND_URL}/reset-password?token=...` that works once, for 30 minutes. " +
+          "Always returns the same message, so it can't be used to check who has an account. " +
+          "Requesting again cancels earlier links.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["email"],
+              properties: { email: { type: "string", format: "email" } },
+            },
+            { email: "ada@example.com" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Request accepted",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "If an account exists for that email, we've sent a link to reset the password." },
+            ),
+          },
+          400: validationError,
+          429: errorResponse(
+            "More than 5 requests from this address in an hour",
+            "Too many reset requests, please try again later",
+          ),
+        },
+      },
+    },
+    "/auth/reset-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Set a new password with the emailed token",
+        description:
+          "The frontend's /reset-password page reads `token` from its URL and sends it here " +
+          "with the new password. The user gets a \"password changed\" email afterwards. " +
+          "Note: tokens already issued to other devices stay valid until they expire.",
+        security: [],
+        requestBody: {
+          required: true,
+          content: json(
+            {
+              type: "object",
+              required: ["token", "password"],
+              properties: {
+                token: { type: "string", description: "From the reset link" },
+                password: { type: "string", format: "password", minLength: 8, maxLength: 72 },
+              },
+            },
+            { token: "q3Jx...from-the-link", password: "new-s3cret-pass" },
+          ),
+        },
+        responses: {
+          200: {
+            description: "Password changed",
+            content: json(
+              { $ref: "#/components/schemas/Message" },
+              { message: "Password updated. You can now log in with your new password." },
+            ),
+          },
+          400: {
+            description: "Password too short or long, or the link is invalid, used or expired",
+            content: json(
+              { oneOf: [{ $ref: "#/components/schemas/ValidationError" }, { $ref: "#/components/schemas/Error" }] },
+              { message: "This reset link is invalid or has expired. Please request a new one." },
+            ),
+          },
+          429: errorResponse(
+            "More than 10 attempts from this address in 15 minutes",
+            "Too many attempts, please try again in 15 minutes",
+          ),
         },
       },
     },
@@ -209,6 +300,10 @@ export const openApiSpec = {
             "Image is not a receipt or could not be read",
             "This image doesn't look like an electricity receipt",
           ),
+          429: errorResponse(
+            "More than 20 scans by this user in an hour; enter details manually",
+            "You've scanned a lot of receipts this hour, please enter the details manually or try again later",
+          ),
           503: errorResponse(
             "Scanning is unavailable (no API key, outage or rate limit); enter details manually",
             "Receipt scanning is unavailable, please enter the details manually",
@@ -224,19 +319,42 @@ export const openApiSpec = {
           "Saves an electricity purchase for the logged-in user and applies it to the " +
           "bill for the month it was bought in (Africa/Lagos time). Up to the amount still " +
           "owed counts toward the bill; the rest is recorded as extra. A payment in a month " +
-          "with no bill (no plan, or before the plan started) is entirely extra.",
+          "with no bill (no plan, or before the plan started) is entirely extra.\n\n" +
+          "To keep the receipt photo with the payment, send `multipart/form-data` with the " +
+          "same fields plus a `receipt` image. It is stored privately on Cloudinary; view it " +
+          "with `GET /subscriptions/{id}/receipt`.",
         requestBody: {
           required: true,
-          content: json(
-            { $ref: "#/components/schemas/PaymentInput" },
-            {
-              amount: 8000,
-              kilowattHours: 100,
-              token: "1234-5678-9012-3456-7890",
-              purchasedAt: "2026-10-09T14:30:00+01:00",
-              source: "RECEIPT",
+          content: {
+            ...json(
+              { $ref: "#/components/schemas/PaymentInput" },
+              {
+                amount: 8000,
+                kilowattHours: 100,
+                token: "1234-5678-9012-3456-7890",
+                purchasedAt: "2026-10-09T14:30:00+01:00",
+                source: "RECEIPT",
+              },
+            ),
+            "multipart/form-data": {
+              schema: {
+                allOf: [
+                  { $ref: "#/components/schemas/PaymentInput" },
+                  {
+                    type: "object",
+                    properties: {
+                      receipt: {
+                        type: "string",
+                        format: "binary",
+                        description: "Optional receipt photo: JPEG, PNG, WebP or GIF, up to 5 MB",
+                      },
+                    },
+                  },
+                ],
+              },
+              encoding: { receipt: { contentType: "image/jpeg, image/png, image/webp, image/gif" } },
             },
-          ),
+          },
         },
         responses: {
           201: {
@@ -265,6 +383,7 @@ export const openApiSpec = {
                   token: "12345678901234567890",
                   kilowattHours: 100,
                   source: "RECEIPT",
+                  hasReceiptImage: true,
                   month: "2026-10",
                   purchasedAt: "2026-10-09T13:30:00.000Z",
                 },
@@ -281,6 +400,31 @@ export const openApiSpec = {
           400: validationError,
           401: unauthorized,
           409: errorResponse("Token already recorded", "This token has already been recorded"),
+          503: errorResponse(
+            "The receipt image couldn't be uploaded; nothing was saved",
+            "Couldn't save the receipt image, please try again",
+          ),
+        },
+      },
+    },
+    "/subscriptions/{id}/receipt": {
+      get: {
+        tags: ["Payments"],
+        summary: "Get a link to my payment's receipt image",
+        description:
+          "Returns a signed Cloudinary link to the receipt image. The link expires after " +
+          "5 minutes, so request a new one each time the image is shown.",
+        parameters: [{ $ref: "#/components/parameters/PaymentId" }],
+        responses: {
+          200: {
+            description: "Signed link to the image",
+            content: json({ $ref: "#/components/schemas/ReceiptImageLink" }),
+          },
+          401: unauthorized,
+          404: errorResponse(
+            "No payment with that id for this user, or it has no image",
+            "This payment has no receipt image",
+          ),
         },
       },
     },
@@ -321,6 +465,92 @@ export const openApiSpec = {
             }),
           },
           401: unauthorized,
+        },
+      },
+    },
+    "/leaderboard/month": {
+      get: {
+        tags: ["Leaderboard"],
+        summary: "Monthly leaderboard",
+        description:
+          "Everyone who paid in the month (Africa/Lagos time), ranked by total paid, or by " +
+          "extra paid with `sortBy=extra`. Shows names and amounts only, never emails. " +
+          "Users with the same amount share a rank.",
+        parameters: [
+          {
+            name: "month",
+            in: "query",
+            description: "Defaults to the current month",
+            schema: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$", example: "2026-10" },
+          },
+          { $ref: "#/components/parameters/LeaderboardSort" },
+        ],
+        responses: {
+          200: {
+            description: "The leaderboard",
+            content: json({ $ref: "#/components/schemas/Leaderboard" }, {
+              period: {
+                type: "month",
+                key: "2026-10",
+                from: "2026-09-30T23:00:00.000Z",
+                to: "2026-10-31T23:00:00.000Z",
+              },
+              sortBy: "total",
+              totals: { totalPaid: 23000, billPaid: 20000, extraPaid: 3000, payers: 2 },
+              entries: [
+                { rank: 1, name: "Ada Obi", isMe: true, totalPaid: 13000, billPaid: 10000, extraPaid: 3000, payments: 2 },
+                { rank: 2, name: "Tunde Bello", isMe: false, totalPaid: 10000, billPaid: 10000, extraPaid: 0, payments: 1 },
+              ],
+              me: { rank: 1, name: "Ada Obi", isMe: true, totalPaid: 13000, billPaid: 10000, extraPaid: 3000, payments: 2 },
+            }),
+          },
+          400: validationError,
+          401: unauthorized,
+        },
+      },
+    },
+    "/leaderboard/year": {
+      get: {
+        tags: ["Leaderboard"],
+        summary: "Yearly leaderboard",
+        description: "Same as the monthly leaderboard, for a whole calendar year.",
+        parameters: [
+          {
+            name: "year",
+            in: "query",
+            description: "Defaults to the current year",
+            schema: { type: "string", pattern: "^\\d{4}$", example: "2026" },
+          },
+          { $ref: "#/components/parameters/LeaderboardSort" },
+        ],
+        responses: {
+          200: {
+            description: "The leaderboard",
+            content: json({ $ref: "#/components/schemas/Leaderboard" }),
+          },
+          400: validationError,
+          401: unauthorized,
+        },
+      },
+    },
+    "/admin/users": {
+      get: {
+        tags: ["Admin"],
+        summary: "List all users",
+        description: "Sorted by name. Use a user's `id` with the other admin endpoints.",
+        responses: {
+          200: {
+            description: "All users",
+            content: json({
+              type: "object",
+              required: ["users"],
+              properties: {
+                users: { type: "array", items: { $ref: "#/components/schemas/AdminUser" } },
+              },
+            }),
+          },
+          401: unauthorized,
+          403: forbidden,
         },
       },
     },
@@ -394,6 +624,26 @@ export const openApiSpec = {
         },
       },
     },
+    "/admin/payments/{id}/receipt": {
+      get: {
+        tags: ["Admin"],
+        summary: "Get a link to any payment's receipt image",
+        description: "Same as `GET /subscriptions/{id}/receipt`, for any user's payment.",
+        parameters: [{ $ref: "#/components/parameters/PaymentId" }],
+        responses: {
+          200: {
+            description: "Signed link to the image",
+            content: json({ $ref: "#/components/schemas/ReceiptImageLink" }),
+          },
+          401: unauthorized,
+          403: forbidden,
+          404: errorResponse(
+            "No payment with that id, or it has no image",
+            "This payment has no receipt image",
+          ),
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -401,7 +651,7 @@ export const openApiSpec = {
         type: "http",
         scheme: "bearer",
         bearerFormat: "JWT",
-        description: "The `token` from register or login. Expires after 1 hour.",
+        description: "The `token` from register or login. Expires after 7 days.",
       },
     },
     parameters: {
@@ -411,6 +661,19 @@ export const openApiSpec = {
         required: true,
         description: "The user's id",
         schema: { type: "string", format: "uuid" },
+      },
+      PaymentId: {
+        name: "id",
+        in: "path",
+        required: true,
+        description: "The payment's id",
+        schema: { type: "string", format: "uuid" },
+      },
+      LeaderboardSort: {
+        name: "sortBy",
+        in: "query",
+        description: "Rank by total paid, or by extra paid beyond the monthly bills",
+        schema: { type: "string", enum: ["total", "extra"], default: "total" },
       },
     },
     schemas: {
@@ -444,20 +707,41 @@ export const openApiSpec = {
       },
       User: {
         type: "object",
-        required: ["id", "email", "firstName", "lastName"],
+        required: ["id", "email", "firstName", "lastName", "role"],
         properties: {
           id: { type: "string", format: "uuid" },
           email: { type: "string", format: "email" },
           firstName: { type: ["string", "null"] },
           lastName: { type: ["string", "null"] },
+          role: {
+            type: "string",
+            enum: ["USER", "ADMIN"],
+            description: "ADMIN users can use the /admin endpoints",
+          },
         },
+      },
+      AdminUser: {
+        allOf: [
+          { $ref: "#/components/schemas/User" },
+          {
+            type: "object",
+            required: ["monthlyAmount", "createdAt"],
+            properties: {
+              monthlyAmount: {
+                type: ["number", "null"],
+                description: "Amount due each month, or null if the user has no plan",
+              },
+              createdAt: { type: "string", format: "date-time" },
+            },
+          },
+        ],
       },
       AuthResponse: {
         type: "object",
         required: ["message", "token", "user"],
         properties: {
           message: { type: "string" },
-          token: { type: "string", description: "JWT, valid for 1 hour" },
+          token: { type: "string", description: "JWT, valid for 7 days" },
           user: { $ref: "#/components/schemas/User" },
         },
       },
@@ -491,7 +775,7 @@ export const openApiSpec = {
         type: "object",
         required: [
           "id", "amount", "billAmount", "extraAmount", "type",
-          "token", "kilowattHours", "source", "month", "purchasedAt",
+          "token", "kilowattHours", "source", "hasReceiptImage", "month", "purchasedAt",
         ],
         properties: {
           id: { type: "string", format: "uuid" },
@@ -507,6 +791,10 @@ export const openApiSpec = {
           token: { type: ["string", "null"] },
           kilowattHours: { type: "number" },
           source: { type: "string", enum: ["RECEIPT", "MANUAL"] },
+          hasReceiptImage: {
+            type: "boolean",
+            description: "true if a receipt photo was saved; fetch it from GET /subscriptions/{id}/receipt",
+          },
           month: { type: "string", pattern: "^\\d{4}-\\d{2}$", example: "2026-10" },
           purchasedAt: { type: "string", format: "date-time" },
         },
@@ -539,6 +827,59 @@ export const openApiSpec = {
           remaining: { type: "number", description: "Still owed; 0 when paid" },
           status: { $ref: "#/components/schemas/BillStatus" },
           paidAt: { type: ["string", "null"], format: "date-time" },
+        },
+      },
+      LeaderboardEntry: {
+        type: "object",
+        required: ["rank", "name", "isMe", "totalPaid", "billPaid", "extraPaid", "payments"],
+        properties: {
+          rank: { type: "integer", minimum: 1, description: "Equal amounts share a rank" },
+          name: { type: "string", description: "First and last name, or \"Anonymous\" if not set" },
+          isMe: { type: "boolean", description: "true for the logged-in user's row" },
+          totalPaid: { type: "number" },
+          billPaid: { type: "number", description: "Counted toward monthly bills" },
+          extraPaid: { type: "number", description: "Paid beyond the monthly bills" },
+          payments: { type: "integer", description: "Number of payments in the period" },
+        },
+      },
+      Leaderboard: {
+        type: "object",
+        required: ["period", "sortBy", "totals", "entries", "me"],
+        properties: {
+          period: {
+            type: "object",
+            required: ["type", "key", "from", "to"],
+            properties: {
+              type: { type: "string", enum: ["month", "year"] },
+              key: { type: "string", examples: ["2026-10", "2026"] },
+              from: { type: "string", format: "date-time", description: "Start, inclusive" },
+              to: { type: "string", format: "date-time", description: "End, exclusive" },
+            },
+          },
+          sortBy: { type: "string", enum: ["total", "extra"] },
+          totals: {
+            type: "object",
+            required: ["totalPaid", "billPaid", "extraPaid", "payers"],
+            properties: {
+              totalPaid: { type: "number" },
+              billPaid: { type: "number" },
+              extraPaid: { type: "number" },
+              payers: { type: "integer", description: "Number of people who paid" },
+            },
+          },
+          entries: { type: "array", items: { $ref: "#/components/schemas/LeaderboardEntry" } },
+          me: {
+            oneOf: [{ $ref: "#/components/schemas/LeaderboardEntry" }, { type: "null" }],
+            description: "The logged-in user's row, or null if they paid nothing in the period",
+          },
+        },
+      },
+      ReceiptImageLink: {
+        type: "object",
+        required: ["url", "expiresAt"],
+        properties: {
+          url: { type: "string", format: "uri", description: "Signed Cloudinary link to the JPEG" },
+          expiresAt: { type: "string", format: "date-time", description: "When the link stops working" },
         },
       },
       ScannedReceipt: {

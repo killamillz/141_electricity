@@ -16,6 +16,7 @@ export interface PaymentInput {
   token?: string | undefined;
   purchasedAt?: Date | undefined;
   source?: "RECEIPT" | "MANUAL" | undefined;
+  receiptImageId?: string | undefined;
 }
 
 /**
@@ -184,6 +185,7 @@ export const recordPayment = async (userId: string, input: PaymentInput) => {
         token: input.token ?? null,
         purchasedAt,
         source: input.source ?? "MANUAL",
+        receiptImageId: input.receiptImageId ?? null,
         billId: billAmount.gt(0) && bill ? bill.id : null,
       },
     });
@@ -210,6 +212,7 @@ export const formatPayment = (p: PaymentRow) => {
     token: p.token,
     kilowattHours: p.kilowattHours.toNumber(),
     source: p.source,
+    hasReceiptImage: p.receiptImageId !== null, // fetch it from GET /subscriptions/:id/receipt
     month: monthKey(p.purchasedAt),
     purchasedAt: p.purchasedAt,
   };
@@ -222,6 +225,27 @@ export const listPayments = async (userId: string) => {
   });
 
   return payments.map(formatPayment);
+};
+
+/**
+ * The Cloudinary public_id of a payment's receipt image. Pass `userId` to
+ * only find the user's own payments; leave it out for admins.
+ */
+export const findReceiptImageId = async (paymentId: string, userId?: string) => {
+  const payment = await prisma.subscription.findFirst({
+    where: userId ? { id: paymentId, userId } : { id: paymentId },
+    select: { receiptImageId: true },
+  });
+
+  if (!payment) {
+    throw new AppError(404, "Payment not found");
+  }
+
+  if (!payment.receiptImageId) {
+    throw new AppError(404, "This payment has no receipt image");
+  }
+
+  return payment.receiptImageId;
 };
 
 export const listBills = async (userId: string) => {
